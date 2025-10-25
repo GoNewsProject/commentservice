@@ -4,6 +4,7 @@ go 1.24.2
 
 require (
 	github.com/Fau1con/kafkawrapper v0.0.0-20250930120434-2be0ca3c5dd2 // indirect
+	github.com/Fau1con/renderresponse v0.0.0-20251019110801-a7e73e4186f8 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/jackc/chunkreader/v2 v2.0.1 // indirect
 	github.com/jackc/pgconn v1.14.3 // indirect
