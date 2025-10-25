@@ -3,12 +3,12 @@ package storage
 import (
 	"commentservice/internal/models"
 	"context"
-	"log/slog"
 )
 
 type CommentStorage interface {
-	AddComment(ctx context.Context, comment *models.Comment, log *slog.Logger) error
-	GetComments(ctx context.Context, newsID, parrentID int, comment string, newsStore *newsStorage, log *slog.Logger) ([]*models.Comment, error)
+	AddComment(ctx context.Context, comment *models.Comment) error
+	GetComments(ctx context.Context, newsID string, limit int, offset int) ([]*models.Comment, error)
+	CheckCommentIDExists(ctx context.Context, commentID int) bool
 	Close()
 }
 type NewsChecker interface {

@@ -124,7 +124,7 @@ func (s *Storage) AddComment(ctx context.Context, newsChecker NewsChecker, postI
 }
 
 // GetComments получает список комментариев по ID новости
-func (s *Storage) GetComments(ctx context.Context, newsID int, newsStore *Storage, log *slog.Logger) (comments []*models.Comment, err error) {
+func (s *Storage) GetComments(ctx context.Context, newsID int, newsStore *Storage, log *slog.Logger) ([]*models.Comment, err error) {
 	if !newsIDCheck(ctx, newsID, newsStore, log) {
 		err := errors.New("The post with ID does not exist")
 		log.Error("The post with ID %d does not exist", newsID, err)

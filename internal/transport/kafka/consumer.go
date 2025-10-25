@@ -1,10 +1,14 @@
 package kafka
 
 import (
+	"commentservice/internal/models"
+	"commentservice/storage"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -13,17 +17,19 @@ import (
 )
 
 type Client struct {
-	brokers      []string
-	listConsumer *kfk.Consumer
-	addConsumer  *kfk.Consumer
-	producer     *kfk.Producer
-	log          *slog.Logger
+	brokers        []string
+	listConsumer   *kfk.Consumer
+	addConsumer    *kfk.Consumer
+	producer       *kfk.Producer
+	log            *slog.Logger
+	commentStorage storage.CommentStorage
 }
 
-func NewClient(brokers []string, log *slog.Logger) *Client {
+func NewClient(brokers []string, log *slog.Logger, commentStorage storage.CommentStorage) *Client {
 	return &Client{
-		brokers: brokers,
-		log:     log,
+		brokers:        brokers,
+		log:            log,
+		commentStorage: commentStorage,
 	}
 }
 
@@ -51,81 +57,278 @@ func (c *Client) Run(ctx context.Context) error {
 	return nil
 }
 
+// consumeListRequests Обрабатывает сообщение из топика comments_input и возращает комментарии
 func (c *Client) consumeListRequests(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
 		default:
 		}
-		msg, err := c.listConsumer.Fetch(ctx)
+		msg, err := c.listConsumer.GetMessage(ctx)
 		if err != nil {
-			if ctx.Err() != nil {
-				c.log.Error("AddConsumer fetch error", "error", err)
-				return
+			c.log.Error("Failed to read message from Kafka",
+				slog.Any("error", err))
+		
+			continue
+		}
+		var request models.ListCommentRequest
+
+		if err := json.Unmarshal(msg.Value, &request); err != nil {
+			c.log.Error("Failed to unmarshal list request",
+				slog.Any("error", err))
+			continue
+		}
+
+		if request.NewsID == "" {
+			c.log.Error("Invalid NewsID parameter")
+			continue
+		}
+
+		// Сходить в БД newsservice, проверить наличие новости по newsID (Через Kafka или по API?)
+
+		comments, err := с.commentStorage.GetComments(ctx, request.NewsID, request.Limit, request.Offset) // Нужно передавать копии или указатели?
+		if err != nil {
+			result := models.ListCommentResponse{
+			
+				RequestID: request.RequestID,
+				Status: http.StatusInternalServerError,
+				Error: "failed to get comments from db",
 			}
-			time.Sleep(1 * time.Second)
+			c.log.Error("Failed to get comments from db for newsID",
+				slog.String("newsID", request.NewsID),
+				slog.Any("error", err))
+			if err := c.producer.SendMessage(ctx, "comments", []byte("failed to get comments from db", result)); err != nil {
+				c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+			}
 			continue
 		}
-		var cmd kfk.CommandMessage
-		if err := json.Unmarshal(msg.Value, &cmd); err != nil { //где поле msg.Value
-			_ = c.listConsumer.Commit(ctx, msg)
+
+		if len(comments) == 0 {
+			result := models.ListCommentResponse{
+			
+				RequestID: request.RequestID,
+				Status: http.StatusOK,
+				Error: "no comments found",
+			}
+			c.log.Info("No comments for news with newsID",
+				slog.String("newsID", request.NewsID))
+			if err := c.producer.SendMessage(ctx, "comments", []byte("No comments found")); err != nil {
+				c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+			}
 			continue
 		}
-		var data json.RawMessage
-		var status int
-		if strings.HasPrefix(cmd.Path, "/comments") {
-			data, status = handleList()
-		} else {
-			status = 400 // Bad Request
-		}
-		if err := c.sendResponse(ctx, msg.Key, cmd.RequestID, status, data); err != nil {
-			c.log.Error("Failed to send response", "error", err, "request_id", cmd.RequestID)
+
+		resultData, err := json.Marshal(comments)
+		if err != nil {
+			result := models.ListCommentResponse{
+				Data: nil,
+				RequestID: request.RequestID,
+				Status: http.StatusInternalServerError,
+				Error: "failed to marshal result",
+			}
+			c.log.Error("Failed to marshal result",
+				slog.Any("error", err))
+			if err := c.producer.SendMessage(ctx, "comments", []byte("failed to marshal result")); err != nil {
+				c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+			}
 			continue
 		}
-		if err := c.addConsumer.Commit(ctx, msg); err != nil {
-			c.log.Error("Commit error", "error", err)
+
+		if err := c.producer.SendMessage(ctx, "comments", resultData); err != nil {
+			c.log.Error("Failed to write message to Kafka",
+				slog.Any("error", err))
 		}
 	}
 }
 
-func (c *Client) sendResponse(ctx context.Context, key []byte, requestID string, status int, data json.RawMessage) error {
-	response := kfk.ResponseMessage{
-		RequestID: requestID,
-		Status:    status,
-		Data:      data,
-	}
-	b, err := json.Marshal(response)
-	if err != nil {
-		c.log.Error("Failed to parse response", "error, err")
-		return fmt.Errorf("marshal failed: %w", err)
-	}
-	if err := c.producer.Send(ctx, key, b); err != nil {
-		c.log.Error("Failed to send", "error", err)
-		return fmt.Errorf("send failed: %w", err)
-	}
-	return nil
-}
-
+// consumeAddRequest Обрабатывает сообщение из топика comments_input и сохраняет комментарий
 func (c *Client) consumeAddRequest(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			return fmt.Errorf("context was cancelled")
 		default:
 		}
-		msg, err := c.addConsumer.Fetch(ctx)
+
+		msg, err := c.addConsumer.GetMessages(ctx)
 		if err != nil {
-			if ctx.Err() != nil { // можно ли использовать if errors.Is(ctx.Err(), context.Canceled) ?
-				c.log.Error("AddConsumer Fetch error", "error", err)
-				return fmt.Errorf("fetch error: %w", err)
+			c.log.Error("Failed to read message from Kafka",
+				slog.Any("error", err))
+			time.Sleep(1 * time.Second)
+			continue
+	}
+	var request models.AddCommentRequest
+
+		if err := json.Unmarshal(msg.Value, &request); err != nil {
+			result :=  models.AddCommentResponse{
+				RequestID: request.Data.RequestID,
+				Status: http.StatusInternalServerError,
+				Error: "failed to unmarshal add request",
 			}
+			resultBytes, _ := json.Marshal(result)
+			c.log.Error("Failed to unmarshal add request",
+				slog.Any("error", err))
+			if err := c.producer.SendMessage(ctx, "comments", []byte(resultBytes)); err != nil {
+				c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+			}
+			continue
+		}
+		// Нужно ли идти проверять наличие новости по newsID а DB newsservice?
+
+		c.commentStorage.CheckCommentIDExists(ctx, newComment.NewComment.CommentID) // Проверить наличие комментария в БД по ID
+
+		err := c.commentStorage.AddComment(ctx, &request.Data); err != nil {
+			result :=  models.AddCommentResponse{
+				RequestID: request.Data.RequestID,
+				Status: http.StatusInternalServerError,
+				Error: "failed to save comment in DB",
+			}
+			c.log.Error("Failed to save comment in DB",
+		slog.String("comment ID", request.Data.CommentID),
+	slog.Any("error", err))
+	err := c.producer.SendMessage(ctx, "comments", []byte(result)); err != nil {
+		c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+	}
+	continue
+		}
+
+		result :=  models.AddCommentResponse{
+				RequestID: request.Data.RequestID,
+				Status: http.StatusCreated,
+				Error: nil,
+			}
+		err := c.producer.SendMessage(ctx, "comments", []byte(result)); err != nil {
+		c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+	}
+}
+}
+
+// ------------------------------------------------------------------------------------------------------------
+// consumeListRequests Обрабатывает сообщение из топика comments_input и возращает комментарии
+func (c *Client) consumeListRequests(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		msg, err := c.listConsumer.GetMessages(ctx)
+		if err != nil {
+			c.log.Error("Failed to read message from Kafka",
+				slog.Any("error", err))
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		var cmd kfk.CommandMessage
-		if err := json.Unmarshal(msg.Value, &cmd); err != nil {
-			_ = c.addConsumer.Commit(ctx, msg)
+		var request models.ListCommentRequest
+		if err := json.Unmarshal(msg.Value, &request); err != nil {
+			c.log.Error("Failed to unmarshal list request",
+				slog.Any("error", err))
 			continue
 		}
+
+		if request.NewsID == "" {
+			c.log.Error("Invalid NewsID parameter")
+			continue
+		}
+
+		// Сходить в БД newsservice, проверить наличие новости по newsID (Через Kafka или по API?)
+
+		comments, err := с.commentStorage.GetComments(ctx, request.NewsID, request.Limit, request.Offset) // Нужно передавать копии или указатели?
+
+		if err != nil {
+			c.log.Error("Failed to get comments from db for newsID",
+				slog.String("newsID", request.NewsID),
+				slog.Any("error", err))
+			if err := c.producer.SendMessage(ctx, "comments", []byte("failed to get comments from db")); err != nil {
+				c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+			}
+			continue
+		}
+
+		if len(comments) == 0 {
+			c.log.Info("No comments for news with newsID",
+				slog.String("newsID", request.NewsID))
+			if err := c.producer.SendMessage(ctx, "comments", []byte("No comments for news")); err != nil {
+				c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+			}
+			continue
+		}
+
+		result, err := json.Marshal(comments)
+		if err != nil {
+			c.log.Error("Failed to marshal result",
+				slog.Any("error", err))
+			if err := c.producer.SendMessage(ctx, "comments", []byte("failed to marshal result")); err != nil {
+				c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+			}
+			continue
+		}
+
+		if err := c.producer.SendMessage(ctx, "comments", result); err != nil {
+			c.log.Error("Failed to write message to Kafka",
+				slog.Any("error", err))
+		}
+	}
+}
+
+// consumeAddRequest Обрабатывает сообщение из топика comments_input и сохраняет комментарий
+func (c *Client) consumeAddRequest(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context was cancelled")
+		default:
+		}
+		msg, err := c.addConsumer.GetMessages(ctx)
+		if err != nil {
+			c.log.Error("Failed to read message from Kafka",
+				slog.Any("error", err))
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		var commentRequest models.AddCommentRequest
+
+		if err := json.Unmarshal(msg.Value, &commentRequest); err != nil {
+			c.log.Error("Failed to unmarshal add request",
+				slog.Any("error", err))
+			if err := c.producer.SendMessage(ctx, "comments", []byte("failed to unmarshal add request")); err != nil {
+				c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+			}
+			continue
+		}
+
+		// Нужно ли идти проверять наличие новости по newsID а DB newsservice?
+
+		c.commentStorage.CheckCommentIDExists(ctx, newComment.NewComment.CommentID) // Проверить наличие комментария в БД по ID
+
+		err := c.commentStorage.AddComment(ctx, &commentRequest.CommentForSave); err != nil {
+			c.log.Error("Failed to save comment in DB",
+		slog.String("comment ID", commentRequest.CommentforSave.CommentID),
+	slog.Any("error", err))
+	err := c.producer.SendMessage(ctx, "comments", []byte("comment successfully saved")); err != nil {
+		c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+	}
+	continue
+		}
+		err := err := c.producer.SendMessage(ctx, "comments", []byte("failed to save comment in db")); err != nil {
+		c.log.Error("Failed to write message to Kafka",
+					slog.Any("error", err))
+	}
+}
+
+		// -------------------------------------------------
 		var data json.RawMessage
 		var status int
 		if strings.HasPrefix(cmd.Path, "/comments") {
@@ -146,25 +349,40 @@ func (c *Client) consumeAddRequest(ctx context.Context) error {
 		}
 	}
 }
+func (c *Client) sendResponse(ctx context.Context, key []byte, requestID string, status int, data json.RawMessage) error {
+	response := kfk.ResponseMessage{
+		RequestID: requestID,
+		Status:    status,
+		Data:      data,
+	}
+	b, err := json.Marshal(response)
+	if err != nil {
+		c.log.Error("Failed to parse response", "error, err")
+		return fmt.Errorf("marshal failed: %w", err)
+	}
+	if err := c.producer.Send(ctx, key, b); err != nil {
+		c.log.Error("Failed to send", "error", err)
+		return fmt.Errorf("send failed: %w", err)
+	}
+	return nil
+}
 
 func handleAdd(cmd *kfk.CommandMessage) (json.RawMessage, int) {
 	var request struct {
-		Text string `json:"text"`
-		UserID int `json:"user_id"`
-		PostID int `json:"post_id"`
+		Text   string `json:"text"`
+		PostID int    `json:"post_id"`
 	}
 	if err := json.Unmarshal(cmd.Body, &request); err != nil {
-	return nil, 400 // Bad Request
+		return nil, 400 // Bad Request
 	}
-	if request.Text == "" || request.UserID == 0 || request.PostID == 0 {
+	if request.Text == "" || request.PostID == 0 {
 		return nil, 422 // Unpocessable Entity
 	}
 	// Сохранение в базу (заглушка)
 	comment := map[string]any{
-		"id": time.Now(),
-		"text": request.Text,
-		"user_id": request.UserID.
-		"post_id": request.PostID,
+		"id":         time.Now(),
+		"text":       request.Text,
+		"post_id":    request.PostID,
 		"created_at": time.Now(),
 	}
 	b, err := json.Marshal(comment)

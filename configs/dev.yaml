@@ -1,0 +1,40 @@
+app:
+  name: commentservice
+  write_timeout: 10
+  read_timeout: 10
+  connect_timeout: 10
+  default_comment_limit: 10
+
+http:
+  host: 0.0.0.0
+  port: 8081
+
+logging:
+  level: debug
+  format: text
+
+database:
+  host: localhost
+  port: 5432
+  username:news
+  password: password
+  dbname: comment_db
+  sstmode: disable
+
+kafka:
+  brokers:
+    - localhost:9092
+  topics:
+    comments_input: comments_input
+    add_comments: add_comments
+    comments: comments
+
+server: ":8081"
+
+routes:
+  - name: newsservice
+    base_url: http://localhost:6000
+  - name: apigateway
+    base_url: http://localhost:8080
+  - name: censorservice
+    base_url: http://localhost:5000
