@@ -38,24 +38,34 @@ func NewNewsAPIClient(baseURL string, log *slog.Logger) *NewsAPIClient {
 func NewCommentStorage(ctx context.Context, dbName string, log *slog.Logger, newsChecker NewsChecker) (*Storage, error) {
 	err := godotenv.Load()
 	if err != nil {
-		log.Error("Failed loading .env file",
-			slog.Any("error", err))
-		return nil, err
+		log.Warn("failed loading .env file, using environment variables", "error", err)
 	}
 	pwd := os.Getenv("DBPASSWORD")
-	connString := "postgres://postgres:" + pwd + "@localhost:5432/" + "DBName"
+	if pwd == "" {
+		return nil, fmt.Errorf("DBPASSWORD enviroment variable is required")
+	}
+
+	connString := fmt.Sprintf("postgres://postgres:%s@localhost:5432/%s", pwd, dbName)
 
 	pool, err := pgxpool.Connect(ctx, connString)
 	if err != nil {
-		log.Error("Failed to connect to BD",
+		log.Error("Failed to connect to database",
 			slog.Any("error", err))
-		return nil, err
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
+
+	if err := pool.Ping(ctx); err != nil {
+		log.Error("failed to ping database", "error", err)
+		return nil, fmt.Errorf("database ping failed: %w", err)
+	}
+
 	s := Storage{
 		db:          pool,
 		log:         log,
 		newsChecker: newsChecker,
 	}
+
+	log.Info("Storage initialized successfully")
 	return &s, nil
 }
 
@@ -135,6 +145,9 @@ func (s *Storage) GetComments(ctx context.Context, newsID int) ([]models.Comment
 }
 
 func (c *NewsAPIClient) NewsExists(ctx context.Context, id int) (bool, error) {
+	if id <= 0 {
+		return false, fmt.Errorf("invalid news ID: %d", id)
+	}
 	url := fmt.Sprintf("%s/news/%d", c.BaseURL, id)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)

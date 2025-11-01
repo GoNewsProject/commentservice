@@ -12,13 +12,15 @@ import (
 )
 
 type Api struct {
-	newsDB         *storage.NewsAPIClient
-	commentsDB     storage.CommentStorage
-	r              *mux.Router
-	ctx            context.Context
-	log            *slog.Logger
-	commentHandler *transport.CommentHandler
-	consumer       *kfk.Consumer
+	newsDB             *storage.NewsAPIClient
+	commentsDB         storage.CommentStorage
+	r                  *mux.Router
+	ctx                context.Context
+	log                *slog.Logger
+	commentHandler     *transport.CommentHandler
+	commentProducer    *kfk.Producer
+	commentConsumer    *kfk.Consumer
+	addCommentConsumer *kfk.Consumer
 }
 
 type Topics struct {
@@ -33,20 +35,23 @@ func New(
 	r *mux.Router,
 	ctx context.Context,
 	log *slog.Logger,
-	consumer *kfk.Consumer,
-	producer *kfk.Producer,
+	commentProducer *kfk.Producer,
+	commentConsumer *kfk.Consumer,
+	addCommentConsumer *kfk.Consumer,
 ) *Api {
-	api := Api{
-		newsDB:     newsDB,
-		commentsDB: commentsDB,
-		r:          mux.NewRouter(),
-		ctx:        ctx,
-		log:        log,
-		consumer:   consumer,
+	api := &Api{
+		newsDB:             newsDB,
+		commentsDB:         commentsDB,
+		r:                  mux.NewRouter(),
+		ctx:                ctx,
+		log:                log,
+		commentProducer:    commentProducer,
+		commentConsumer:    commentConsumer,
+		addCommentConsumer: addCommentConsumer,
 	}
-	api.commentHandler = transport.NewCommentHandler(commentsDB, producer)
+	api.commentHandler = transport.NewCommentHandler(commentsDB, commentProducer)
 	api.endpoints()
-	return &api
+	return api
 }
 
 func (api *Api) Router() *mux.Router {
@@ -56,7 +61,7 @@ func (api *Api) Router() *mux.Router {
 // Регистрация маршрутов
 func (api *Api) endpoints() {
 	//Маршрут предоставления списка комментариев по ID новости
-	api.r.HandleFunc("/comments/?newsID=", api.commentHandler.HandleCommentsGet(api.ctx, api.consumer)).Methods(http.MethodGet, http.MethodOptions)
+	api.r.HandleFunc("/comments/?newsID=", api.commentHandler.HandleCommentsGet(api.ctx, api.commentConsumer)).Methods(http.MethodGet, http.MethodOptions)
 	//Маршрут добавления комментария
-	api.r.HandleFunc("/addComment/", api.commentHandler.HandleFuncCommentAdd(api.ctx, api.consumer)).Methods(http.MethodPost, http.MethodOptions)
+	api.r.HandleFunc("/addComment/", api.commentHandler.HandleFuncCommentAdd(api.ctx, api.addCommentConsumer)).Methods(http.MethodPost, http.MethodOptions)
 }
