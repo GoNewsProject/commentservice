@@ -1,8 +1,8 @@
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/Fau1con/kafkawrapper v0.0.0-20250930120434-2be0ca3c5dd2 h1:Ov9JBu81YyxVZljl04IozzFD0b+Tifd1AHMGaQA3Hts=
 github.com/Fau1con/kafkawrapper v0.0.0-20250930120434-2be0ca3c5dd2/go.mod h1:m351wK6Rc/0qu7exBnUjfpKTEEQqnexbX8e4W4YE+nk=
-github.com/Fau1con/renderresponse v0.0.0-20251019110801-a7e73e4186f8 h1:DISqPgHOOUhke6OBfXWoEoH87ElH9tuc2irrRPU9nKo=
-github.com/Fau1con/renderresponse v0.0.0-20251019110801-a7e73e4186f8/go.mod h1:UmthpyiqpBiJVxXV3FTSajF7SvzodarKZ1PyaCV9R9c=
+github.com/Fau1con/renderresponse v0.0.0-20251026104544-ee95de0c2598 h1:JVP/gnsEufe8y4BGdsH+kE+89cS8O8cz219WbeyjmZs=
+github.com/Fau1con/renderresponse v0.0.0-20251026104544-ee95de0c2598/go.mod h1:UmthpyiqpBiJVxXV3FTSajF7SvzodarKZ1PyaCV9R9c=
 github.com/Masterminds/semver/v3 v3.1.1/go.mod h1:VPu/7SZ7ePZ3QOrcuXROw5FAcLl4a0cBrbBpGY/8hQs=
 github.com/cockroachdb/apd v1.1.0 h1:3LFP3629v+1aKXU5Q37mxmRxX/pIu1nijXydLShEq5I=
 github.com/cockroachdb/apd v1.1.0/go.mod h1:8Sl8LxpKi29FqWXR16WEFZRNSz3SoPzUzeMeY4+DwBQ=

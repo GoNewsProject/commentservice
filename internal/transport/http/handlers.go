@@ -1,10 +1,8 @@
 package http
 
 import (
-	"commentservice/internal/models"
 	"commentservice/storage"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -45,13 +43,26 @@ func (h *CommentHandler) HandleCommentsGet(ctx context.Context, c *kfk.Consumer)
 			httputils.RenderError(w, "failed to read message from Kafka", http.StatusInternalServerError)
 			return
 		}
-		result := strings.TrimPrefix(string(msg.Value), "/comments/")
-		newsID, err := strconv.Atoi(result)
+		params, err := parseURLParams(string(msg.Value))
 		if err != nil {
-			h.producer.SendMessage(ctx, "comments", []byte("failed to parse newsID"))
-			httputils.RenderError(w, "failed to parse newsID", http.StatusBadRequest)
+			h.producer.SendMessage(ctx, "comments", []byte("failed to parse URL params"))
+			httputils.RenderError(w, "failed to parse URL params", http.StatusInternalServerError)
 			return
 		}
+
+		newsIDStr, exists := params["newsID"]
+		if !exists || newsIDStr == "" {
+			h.producer.SendMessage(ctx, "comments", []byte("news ID parameter is required"))
+			httputils.RenderError(w, "news ID parameter is required", http.StatusBadRequest)
+			return
+		}
+		newsID, err := strconv.Atoi(newsIDStr)
+		if err != nil {
+			h.producer.SendMessage(ctx, "comments", []byte("failed to parse news ID parameter"))
+			httputils.RenderError(w, "failed to parse news ID parameter", http.StatusBadRequest)
+			return
+		}
+
 		comments, err := h.storage.GetComments(ctx, newsID)
 		if err != nil {
 			h.producer.SendMessage(ctx, "comments", []byte("failed to get comments from database"))
@@ -59,24 +70,9 @@ func (h *CommentHandler) HandleCommentsGet(ctx context.Context, c *kfk.Consumer)
 			return
 		}
 
-		respResult, err := commentsToBytes(comments)
-		if err != nil {
-			h.producer.SendMessage(ctx, "comments", []byte("failed to marshal response"))
-			httputils.RenderJSON(w, "failed to marshal response", http.StatusInternalServerError)
-			return
-		}
-
-		h.producer.SendMessage(ctx, "comments", []byte(respResult))
+		h.producer.SendMessage(ctx, "comments", []byte(fmt.Sprintf("Retrived comments for news ID %d", newsID)))
 		httputils.RenderJSON(w, comments, http.StatusOK)
 	}
-}
-
-func commentsToBytes(comments []models.Comment) ([]byte, error) {
-	result, err := json.Marshal(comments)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
 }
 
 // HandleFuncCommentAdd добавляет комментарий
@@ -120,6 +116,27 @@ func (h *CommentHandler) HandleFuncCommentAdd(ctx context.Context, c *kfk.Consum
 		h.producer.SendMessage(ctx, "add_comment", []byte("comment has been added to database successfully"))
 		httputils.RenderJSON(w, "comment has been added to database successfully", http.StatusCreated)
 	}
+}
+
+func parseURLParams(input string) (map[string]string, error) {
+	parts := strings.Split(input, "?")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("no query parameters found")
+	}
+
+	values, err := url.ParseQuery(parts[1])
+	if err != nil {
+		return nil, err
+	}
+
+	params := make(map[string]string)
+	for key, value := range values {
+		if len(value) > 0 {
+			params[key] = value[0]
+		}
+	}
+
+	return params, nil
 }
 
 func parseKafkaMessage(msgValue []byte) (string, string, error) {
