@@ -16,7 +16,7 @@ logging:
 database:
   host: localhost
   port: 5432
-  username:news
+  username: news
   password: password
   dbname: comment_db
   sstmode: disable
