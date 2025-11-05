@@ -1,16 +1,11 @@
-package storage
+package service
 
 import (
 	"commentservice/internal/models"
 	"context"
 )
 
-type CommentsStorage interface {
+type CommentService interface {
 	AddComment(ctx context.Context, newsID int, comment string) error
 	GetComments(ctx context.Context, newsID int) ([]models.Comment, error)
-	Close()
-}
-type NewsStorage interface {
-	NewsExists(ctx context.Context, newsID int) (bool, error)
-	Close()
 }

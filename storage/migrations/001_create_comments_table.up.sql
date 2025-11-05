@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS comments(
-    id SERIAL PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_ random_uuid(),
     news_id SERIAL,
     content TEXT(2000) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL

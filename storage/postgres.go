@@ -1,96 +1,131 @@
 package storage
 
 import (
+	"commentservice/internal/infrastructure/config"
 	"commentservice/internal/models"
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"os"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/joho/godotenv"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Storage struct {
-	db          *pgxpool.Pool
-	log         *slog.Logger
-	newsChecker NewsChecker
+	db  *pgxpool.Pool
+	log *slog.Logger
 }
 
-// NewsAPIClient для проверки новостей через API
-type NewsAPIClient struct {
-	BaseURL string
-	Client  *http.Client
-	log     *slog.Logger
-}
+// newStorage внутренняя функция создания хранилища
+func newStorage(dbConfig config.DBConfig, dbName string, log *slog.Logger) (*Storage, error) {
+	connStr := dbConfig.GetDSN()
+	log.Debug("Connecting to database",
+		"database", dbName,
+		"dsn", fmt.Sprintf("postgres://%s:***@%s:%d/%s",
+			dbConfig.UserName, dbConfig.Host, dbConfig.Port, dbConfig.DBName))
 
-func NewNewsAPIClient(baseURL string, log *slog.Logger) *NewsAPIClient {
-	return &NewsAPIClient{
-		BaseURL: baseURL,
-		Client:  &http.Client{Timeout: 10 * time.Second},
-		log:     log,
-	}
-}
-
-func NewCommentStorage(ctx context.Context, dbName string, log *slog.Logger, newsChecker NewsChecker) (*Storage, error) {
-	err := godotenv.Load()
+	db, err := pgxpool.New(context.Background(), connStr)
 	if err != nil {
-		log.Warn("failed loading .env file, using environment variables", "error", err)
-	}
-	pwd := os.Getenv("DBPASSWORD")
-	if pwd == "" {
-		return nil, fmt.Errorf("DBPASSWORD enviroment variable is required")
+		return nil, fmt.Errorf("failed to create connection to database %s: %w", dbName, err)
 	}
 
-	connString := fmt.Sprintf("postgres://postgres:%s@localhost:5432/%s", pwd, dbName)
-
-	pool, err := pgxpool.Connect(ctx, connString)
-	if err != nil {
-		log.Error("Failed to connect to database",
-			slog.Any("error", err))
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	if err := db.Ping(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to ping %s database: %w", dbName, err)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
-		log.Error("failed to ping database", "error", err)
-		return nil, fmt.Errorf("database ping failed: %w", err)
-	}
+	log.Info("database connection established",
+		"database", dbName,
+		"host", dbConfig.Host,
+		"port", dbConfig.Port,
+		"database", dbConfig.DBName)
 
-	s := Storage{
-		db:          pool,
-		log:         log,
-		newsChecker: newsChecker,
-	}
-
-	log.Info("Storage initialized successfully")
-	return &s, nil
+	return &Storage{
+		db:  db,
+		log: log,
+	}, nil
 }
+
+// NewCommentsStorage создает подключение к базе комментариев
+func NewCommentStorage(cfg *config.Config, log *slog.Logger) (*Storage, error) {
+	dbConfig := cfg.GetCommentsDBConfig()
+	return newStorage(dbConfig, "comments", log)
+}
+
+// NewNewsStorage создает подключение к базе новостей
+func NewNewsStorage(cfg *config.Config, log *slog.Logger) (*Storage, error) {
+	dbConfig := cfg.GetNewsDBConfig()
+	return newStorage(dbConfig, "news", log)
+}
+
+// type StorageType string
+
+// const (
+// 	StorageTypeComments StorageType = "comments"
+// 	StorageTypeNews     StorageType = "news"
+// )
+
+// type Storage struct {
+// 	db          *pgxpool.Pool
+// 	log         *slog.Logger
+// 	storageType StorageType
+// 	config      config.DBConfig
+// }
+
+// // NewStorage создает подключение к указанной базе данных
+// func NewStorage(storageType StorageType, cfg *config.Config, log *slog.Logger) (*Storage, error) {
+// 	var dbConfig config.DBConfig
+// 	var dbName string
+
+// 	switch storageType {
+// 	case StorageTypeComments:
+// 		dbConfig = cfg.GetCommentsDBConfig()
+// 		dbName = "comments"
+// 	case StorageTypeNews:
+// 		dbConfig = cfg.GetNewsDBConfig()
+// 		dbName = "news"
+// 	default:
+// 		return nil, fmt.Errorf("unknow storage type: %s", storageType)
+// 	}
+
+// 	connStr := dbConfig.GetDSN()
+// 	log.Debug("connecting to database",
+// 		"type", storageType,
+// 		"dsn", fmt.Sprintf("postgres://%s:***@%s:%d/%s",
+// 			dbConfig.UserName, dbConfig.Host, dbConfig.Port, dbConfig.DBName))
+
+// 	db, err := pgxpool.New(context.Background(), connStr)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create connection pool for %s: %w", dbName, err)
+// 	}
+
+// 	if err := db.Ping(context.Background()); err != nil {
+// 		return nil, fmt.Errorf("failed to ping %s database: %w", dbName, err)
+// 	}
+
+// 	log.Info("database connection established",
+// 		"type", storageType,
+// 		"host", dbConfig.Host,
+// 		"port", dbConfig.Port,
+// 		"database", dbConfig.DBName)
+
+// 	return &Storage{
+// 		db:          db,
+// 		log:         log,
+// 		storageType: storageType,
+// 		config:      dbConfig,
+// 	}, nil
+// }
 
 // AddComment добавляет комментарий в БД
 func (s *Storage) AddComment(ctx context.Context, newsID int, comment string) error {
-	exists, err := s.newsChecker.NewsExists(ctx, newsID)
+	_, err := s.db.Exec(ctx, `INSERT INTO comments (news_id, message, created_at, updated_at)
+	VALUES ($1, $2, $3, $4)`, newsID, comment, time.Now(), time.Now())
 	if err != nil {
-		s.log.Error("Failed to check news existence", "newsID", newsID, "error", err)
-		return fmt.Errorf("failed to check news: %w", err)
-	}
-	if !exists {
-		err := fmt.Errorf("news with ID %d does not exist", newsID)
-		s.log.Error("news with ID does not exist", "newsID", newsID, "error", err)
-		return err
-	}
-	commentID := uuid.New()
-
-	_, err = s.db.Exec(ctx, `INSERT INTO comments (comment_id, news_id, message, created_at, updated_at)
-	VALUES ($1, $2, $3, $4, $5)`, commentID, newsID, comment, time.Now(), time.Now())
-	if err != nil {
-		s.log.Error("Cannot add comment to database", "newsID", newsID, "error", err)
-		return fmt.Errorf("failed to add comment: %w", err)
+		s.log.Error("failed to save comment to database", "newsID", newsID, "error", err)
+		return fmt.Errorf("failed to save comment: %w", err)
 	}
 
-	s.log.Info("comment added successfully", "newsID", newsID, "commentID", commentID)
+	s.log.Info("comment added successfully", "newsID", newsID)
 	return nil
 }
 
@@ -101,25 +136,15 @@ func (s *Storage) GetComments(ctx context.Context, newsID int) ([]models.Comment
 		s.log.Error("Invalid news ID", "newsID", newsID, "error", err)
 		return nil, err
 	}
-	exists, err := s.newsChecker.NewsExists(ctx, newsID)
-	if err != nil {
-		s.log.Error("Failed to check news existence", "newsID", newsID, "error", err)
-		return []models.Comment{}, fmt.Errorf("failed to check news: %w", err)
-	}
-	if !exists {
-		err := fmt.Errorf("news with ID %d exists", newsID)
-		s.log.Error("news with ID exists", "newsID", newsID, "error", err)
-		return []models.Comment{}, err
-	}
 
 	rows, err := s.db.Query(ctx,
-		`SELECT *
+		`SELECT id, news_id, content, created_at
 		FROM comments
 		WHERE news_id = $1
 		ORDER BY created_at;`,
 		newsID)
 	if err != nil {
-		s.log.Error("Failed to get comments from database", "newsID", newsID, "error", err)
+		s.log.Error("failed to get comments from database", "newsID", newsID, "error", err)
 		return []models.Comment{}, fmt.Errorf("failed to get comments: %w", err)
 	}
 	defer rows.Close()
@@ -144,28 +169,28 @@ func (s *Storage) GetComments(ctx context.Context, newsID int) ([]models.Comment
 	return comments, nil
 }
 
-func (c *NewsAPIClient) NewsExists(ctx context.Context, id int) (bool, error) {
+func (s *Storage) NewsExists(ctx context.Context, id int) (bool, error) {
 	if id <= 0 {
 		return false, fmt.Errorf("invalid news ID: %d", id)
 	}
-	url := fmt.Sprintf("%s/news/%d", c.BaseURL, id)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	var exists bool
+
+	query := `SELECT EXISTS(SELECT 1 FROM news WHERE id = $1)`
+
+	err := s.db.QueryRow(ctx, query, id).Scan(&exists)
 	if err != nil {
-		c.log.Error("failed to create request", "error", err, "news_id", id)
-		return false, fmt.Errorf("failed to create request for news %d: %w", id, err)
+		s.log.Error("failed to check news existence in database", "news_id", id, "error", err)
+		return false, fmt.Errorf("failed to check news existence: %w", err)
 	}
-
-	client := http.Client{Timeout: 7 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		c.log.Error("failed to execute request", "error", err, "news_id", id)
-		return false, fmt.Errorf("failed to check news %d existence: %w", id, err)
-	}
-	defer resp.Body.Close()
-
-	exists := resp.StatusCode == http.StatusOK
-	c.log.Debug("checked news existence", "news_id", id, "exists", exists, "status", resp.StatusCode)
 
 	return exists, nil
+}
+
+func (s *Storage) Close() {
+	if s.db != nil {
+		s.db.Close()
+		s.log.Info("database connection closed",
+			"database", "comments/news")
+	}
 }
