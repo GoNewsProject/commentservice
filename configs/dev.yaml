@@ -13,13 +13,22 @@ logging:
   level: debug
   format: text
 
-database:
-  host: localhost
-  port: 5432
-  username: news
-  password: password
-  dbname: comment_db
-  sstmode: disable
+databases:
+  news:
+    host: localhost
+    port: 5432
+    username: news
+    password: password
+    db_name: newsservice
+    sslmode: disable
+  comments:
+    host: localhost
+    port: 5432
+    username: news
+    password: password
+    db_name: commentservice
+    sslmode: disable
+
 
 kafka:
   brokers:
