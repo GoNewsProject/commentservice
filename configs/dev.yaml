@@ -15,14 +15,14 @@ logging:
 
 databases:
   news:
-    host: localhost
+    host: postgres-news
     port: 5432
     username: news
     password: password
     db_name: newsservice
     sslmode: disable
   comments:
-    host: localhost
+    host: postgres-comments
     port: 5432
     username: news
     password: password
@@ -32,18 +32,18 @@ databases:
 
 kafka:
   brokers:
-    - localhost:9092
+    - kafka:9093
   topics:
-    comments_input: comments_input
-    add_comments: add_comment
+    comment_input: comments_input
+    add_comment: add_comment
     comments: comments
 
 server: ":8081"
 
 routes:
   - name: newsservice
-    base_url: http://localhost:6000
+    base_url: http://newsservice:6000
   - name: apigateway
-    base_url: http://localhost:8080
+    base_url: http://apigateway:8080
   - name: censorservice
     base_url: http://localhost:5000
